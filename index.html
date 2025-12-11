@@ -263,24 +263,39 @@
             if (music) {
                 music.volume = 0.5;
                 music.loop = true;
-                // 尝试自动播放
-                music.play().then(() => {
-                    console.log('音乐自动播放成功并循环');
-                }).catch(e => {
-                    console.log('自动播放失败，需要用户交互:', e);
-                    // 如果自动播放失败，设置事件监听器等待用户交互
-                    let musicStarted = false;
-                    const startMusicOnInteraction = () => {
-                        if (!musicStarted) {
-                            music.play().then(() => {
-                                musicStarted = true;
-                                console.log('用户交互后音乐开始播放并循环');
-                            }).catch(err => console.log('音乐播放失败:', err));
+                // 尝试自动播放，最多重试3次
+                let retryCount = 0;
+                const maxRetries = 3;
+
+                const attemptPlay = () => {
+                    music.play().then(() => {
+                        console.log('音乐自动播放成功并循环');
+                    }).catch(e => {
+                        console.log(`自动播放失败 (尝试 ${retryCount + 1}/${maxRetries}):`, e);
+                        retryCount++;
+
+                        if (retryCount < maxRetries) {
+                            // 延迟1秒后重试
+                            setTimeout(attemptPlay, 1000);
+                        } else {
+                            console.log('自动播放失败，已达到最大重试次数，等待用户交互');
+                            // 如果自动播放失败，设置事件监听器等待用户交互
+                            let musicStarted = false;
+                            const startMusicOnInteraction = () => {
+                                if (!musicStarted) {
+                                    music.play().then(() => {
+                                        musicStarted = true;
+                                        console.log('用户交互后音乐开始播放并循环');
+                                    }).catch(err => console.log('音乐播放失败:', err));
+                                }
+                            };
+                            window.addEventListener('click', startMusicOnInteraction, { once: true });
+                            window.addEventListener('touchstart', startMusicOnInteraction, { once: true });
                         }
-                    };
-                    window.addEventListener('click', startMusicOnInteraction, { once: true });
-                    window.addEventListener('touchstart', startMusicOnInteraction, { once: true });
-                });
+                    });
+                };
+
+                attemptPlay();
             }
         }
 
