@@ -170,7 +170,6 @@
     <div id="ui-layer">
         <div id="top-right-controls">
             <button id="btn-add-photo" class="control-btn">上传照片</button>
-            <button id="btn-fullscreen" class="control-btn">全屏显示</button>
         </div>
         <input type="file" id="file-input" multiple accept="image/*">
     </div>
@@ -180,8 +179,8 @@
         <canvas id="webcam-preview"></canvas>
     </div>
     
-    <audio id="bg-music" loop crossorigin="anonymous">
-        <source src="https://actions.google.com/sounds/v1/holiday/we_wish_you_a_merry_christmas_instrumental.ogg" type="audio/ogg">
+    <audio id="bg-music" loop>
+        <source src="music.mp3" type="audio/mpeg">
     </audio>
 
     <div class="download-btn-container" id="downloadContainer">
@@ -902,27 +901,30 @@
                 fileInput.addEventListener('change', handleImageUpload);
             }
 
-            // UI 按钮: 全屏切换
-            const fullscreenBtn = document.getElementById('btn-fullscreen');
-            if (fullscreenBtn) {
-                fullscreenBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (!document.fullscreenElement) {
-                        document.documentElement.requestFullscreen().catch(err => console.warn(err));
-                    } else {
-                        if (document.exitFullscreen) document.exitFullscreen();
-                    }
-                });
-                document.addEventListener('fullscreenchange', () => {
-                // 如果当前是全屏状态
-                if (document.fullscreenElement) {
-                    fullscreenBtn.textContent = '取消全屏'; 
+            // 双击屏幕切换全屏
+            let clickCount = 0;
+            let clickTimer = null;
+
+            const toggleFullscreen = () => {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(err => console.warn(err));
                 } else {
-                    // 如果退出了全屏
-                    fullscreenBtn.textContent = '全屏显示'; 
+                    if (document.exitFullscreen) document.exitFullscreen();
+                }
+            };
+
+            document.addEventListener('click', (e) => {
+                clickCount++;
+                if (clickCount === 1) {
+                    clickTimer = setTimeout(() => {
+                        clickCount = 0;
+                    }, 300); // 300ms 内双击
+                } else if (clickCount === 2) {
+                    clearTimeout(clickTimer);
+                    clickCount = 0;
+                    toggleFullscreen();
                 }
             });
-            }
 
             // 音乐播放 (交互触发)
             let audioContextStarted = false;
@@ -930,7 +932,13 @@
                 const music = document.getElementById('bg-music');
                 if (music && !audioContextStarted) {
                     music.volume = 0.5;
-                    music.play().then(() => audioContextStarted = true).catch(e=>console.log(e));
+                    music.loop = true; // 确保循环播放
+                    music.play().then(() => {
+                        audioContextStarted = true;
+                        console.log('音乐开始播放并循环');
+                    }).catch(e => {
+                        console.log('音乐播放失败:', e);
+                    });
                 }
             };
             window.addEventListener('click', startMusic, { once: true });
