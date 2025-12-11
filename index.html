@@ -179,7 +179,7 @@
         <canvas id="webcam-preview"></canvas>
     </div>
     
-    <audio id="bg-music" loop>
+    <audio id="bg-music" loop autoplay>
         <source src="music.mp3" type="audio/mpeg">
     </audio>
 
@@ -257,6 +257,33 @@
         let handLandmarker, video, drawingUtils, canvasCtx;
         let caneTexture; // 糖果拐杖纹理
 
+        // 自动播放音乐函数
+        function startAutoMusic() {
+            const music = document.getElementById('bg-music');
+            if (music) {
+                music.volume = 0.5;
+                music.loop = true;
+                // 尝试自动播放
+                music.play().then(() => {
+                    console.log('音乐自动播放成功并循环');
+                }).catch(e => {
+                    console.log('自动播放失败，需要用户交互:', e);
+                    // 如果自动播放失败，设置事件监听器等待用户交互
+                    let musicStarted = false;
+                    const startMusicOnInteraction = () => {
+                        if (!musicStarted) {
+                            music.play().then(() => {
+                                musicStarted = true;
+                                console.log('用户交互后音乐开始播放并循环');
+                            }).catch(err => console.log('音乐播放失败:', err));
+                        }
+                    };
+                    window.addEventListener('click', startMusicOnInteraction, { once: true });
+                    window.addEventListener('touchstart', startMusicOnInteraction, { once: true });
+                });
+            }
+        }
+
         // ==========================================
         // 3. 初始化入口
         // ==========================================
@@ -269,7 +296,10 @@
             createParticles();    // 创建核心粒子系统
             setupPostProcessing();// 设置辉光后期处理
             setupEvents();        // 绑定 DOM 事件
-            
+
+            // 尝试自动播放音乐
+            startAutoMusic();
+
             // 初始化 AI 模型 (异步)
             initMediaPipe().catch(console.warn);
 
@@ -926,7 +956,8 @@
                 }
             });
 
-            // 音乐播放 (交互触发)
+            // 音乐播放 (交互触发) - 已注释，因为现在使用自动播放
+            /*
             let audioContextStarted = false;
             const startMusic = () => {
                 const music = document.getElementById('bg-music');
@@ -943,6 +974,7 @@
             };
             window.addEventListener('click', startMusic, { once: true });
             window.addEventListener('touchstart', startMusic, { once: true });
+            */
 
             // 触摸滑动备用方案 (无摄像头时)
             let touchStartX = 0;
