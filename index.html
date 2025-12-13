@@ -115,7 +115,7 @@
             background: #000;
             z-index: 50;
             /* 关键：确保容器紧贴 Canvas 内容 */
-            display: none;
+            display: block; /* 改为block，让摄像头预览可见 */
             align-items: center;
             justify-content: center;
         }
@@ -169,7 +169,7 @@
 
     <div id="ui-layer">
         <div id="top-right-controls">
-            <button id="btn-add-photo" class="control-btn">上传照片</button>
+            <button id="btn-add-photo" class="control-btn">add images</button>
         </div>
         <input type="file" id="file-input" multiple accept="image/*">
     </div>
@@ -179,7 +179,10 @@
         <canvas id="webcam-preview"></canvas>
     </div>
     
-    <audio id="bg-music" loop autoplay>
+    <audio id="bg-music-perfect" preload="auto">
+        <source src="perfect.mp3" type="audio/mpeg">
+    </audio>
+    <audio id="bg-music-main" loop preload="auto">
         <source src="music.mp3" type="audio/mpeg">
     </audio>
 
@@ -312,11 +315,11 @@
             setupPostProcessing();// 设置辉光后期处理
             setupEvents();        // 绑定 DOM 事件
 
-            // 尝试自动播放音乐
-            startAutoMusic();
-
             // 初始化 AI 模型 (异步)
-            initMediaPipe().catch(console.warn);
+            initMediaPipe().catch(err => {
+                console.error('MediaPipe初始化失败:', err);
+                // 即使失败也继续运行，手势功能不可用
+            });
 
             // 移除 Loading 遮罩
             const loader = document.getElementById('loader');
@@ -417,21 +420,25 @@
                 this.mesh = mesh;
                 this.type = type;
                 this.isDust = isDust;
-                
+
                 this.posTree = new THREE.Vector3();    // 树形态的目标位置
                 this.posScatter = new THREE.Vector3(); // 散开形态的目标位置
-                
+
                 // 动画属性
-                this.baseScale = mesh.scale.x; 
+                this.baseScale = mesh.scale.x;
                 this.offset = Math.random() * 100; // 随机相位偏移
                 this.speed = 0.5 + Math.random();  // 摆动速度
-                
+
+                // 聚焦动画属性
+                this.focusScale = 0; // 聚焦时的当前缩放 (从小变大)
+                this.isInFocus = false; // 是否正在聚焦
+
                 // 材质自发光备份
                 if (mesh.material && mesh.material.emissive) {
                     this.baseEmissive = mesh.material.emissive.clone();
                     this.hasEmissive = true;
                 }
-                
+
                 this.calculatePositions(); // 计算初始形态位置
             }
 
@@ -439,9 +446,19 @@
             calculatePositions() {
                 const h = CONFIG.particles.treeHeight;
                 let t = Math.random(); // 高度比例 0~1
-                
+
                 // --- 1. 计算树形态坐标 (Spiral Cone) ---
-                if (Math.random() > 0.7 && !this.isDust && this.type !== 'PHOTO') {
+                if (this.type === 'PHOTO') {
+                    // 照片特殊处理：避免树顶星星区域
+                    // 限制照片高度在树的下半部分 (t < 0.6)
+                    t = Math.random() * 0.6;
+                    const y = (t * h) - h/2;
+                    let rMax = CONFIG.particles.treeRadius * (1.0 - t);
+                    if (rMax < 0.5) rMax = 0.5;
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = rMax * Math.sqrt(Math.random());
+                    this.posTree.set(Math.cos(angle) * r, y, Math.sin(angle) * r);
+                } else if (Math.random() > 0.7 && !this.isDust && this.type !== 'PHOTO') {
                     // 核心树干部分 (更规则)
                     const y = (t * h) - h/2;
                     const rBase = CONFIG.particles.treeRadius * (1.0 - t);
@@ -451,10 +468,10 @@
                     // 树冠填充部分 (更随机)
                     t = Math.pow(t, 0.8); // 分布曲线调整
                     const y = (t * h) - h/2;
-                    let rMax = CONFIG.particles.treeRadius * (1.0 - t); 
+                    let rMax = CONFIG.particles.treeRadius * (1.0 - t);
                     if (rMax < 0.5) rMax = 0.5;
                     const angle = Math.random() * Math.PI * 2;
-                    const r = rMax * Math.sqrt(Math.random()); 
+                    const r = rMax * Math.sqrt(Math.random());
                     this.posTree.set(Math.cos(angle) * r, y, Math.sin(angle) * r);
                 }
 
@@ -478,7 +495,7 @@
                 // 根据模式决定目标位置
                 if (mode === 'SCATTER') {
                     target = this.posScatter;
-                } 
+                }
                 else if (mode === 'FOCUS') {
                     // 聚焦模式：被选中的物体飞到镜头前，其他的退后
                     if (this.mesh === focusTargetMesh) {
@@ -488,11 +505,22 @@
                         target = camPos.applyMatrix4(invMatrix);
                         lerpSpeed = 6.0; // 聚焦时飞得快一点
                         this.mesh.lookAt(camera.position);
+
+                        // 聚焦动画：从小变大
+                        if (!this.isInFocus) {
+                            this.focusScale = 0.1; // 从很小开始
+                            this.isInFocus = true;
+                        }
+                        // 逐渐变大，最大到3倍基础尺寸
+                        this.focusScale = THREE.MathUtils.lerp(this.focusScale, this.baseScale * 2.5, dt * 3.0);
+                        s = this.focusScale;
                     } else {
                         target = this.posScatter;
                         s = 0.01; // 其他粒子缩小
+                        this.isInFocus = false; // 重置聚焦状态
+                        this.focusScale = 0;
                     }
-                } 
+                }
                 else if (mode === 'METEOR') {
                     // 流星雨模式逻辑 (保留接口，目前手势未触发)
                     target = this.posScatter; 
@@ -583,9 +611,9 @@
         function createParticles() {
             const sphereGeo = new THREE.SphereGeometry(0.5, 32, 32); 
             const boxGeo = new THREE.BoxGeometry(0.45, 0.45, 0.45); 
-            // 糖果形状
+            // 糖果形状（加大手杖尺寸）
             const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0, -0.5, 0), new THREE.Vector3(0, 0.3, 0), new THREE.Vector3(0.1, 0.5, 0), new THREE.Vector3(0.3, 0.4, 0)]);
-            const candyGeo = new THREE.TubeGeometry(curve, 16, 0.08, 8, false);
+            const candyGeo = new THREE.TubeGeometry(curve, 20, 0.08, 8, false);
 
             // 材质库
             const goldMat = new THREE.MeshStandardMaterial({ color: CONFIG.colors.gold, metalness: 1.0, roughness: 0.15, envMapIntensity: 2.5, emissive: 0x664400, emissiveIntensity: 0.2 });
@@ -626,15 +654,63 @@
         }
 
         function createStarTopper() {
-            const starGeo = new THREE.OctahedronGeometry(1.5, 0);
-            const starMat = new THREE.MeshStandardMaterial({ color: 0xffdd88, emissive: 0xffaa00, emissiveIntensity: 2.0, metalness: 1.0, roughness: 0 });
+            // 创建五角星形状
+            const starShape = new THREE.Shape();
+            const outerRadius = 2.0;
+            const innerRadius = 1.0;
+            const spikes = 5;
+
+            for (let i = 0; i < spikes * 2; i++) {
+                const angle = (i * Math.PI) / spikes - Math.PI / 2; // 从-90度开始，让第一个角朝上
+                const radius = i % 2 === 0 ? outerRadius : innerRadius;
+                const x = Math.cos(angle) * radius;
+                const y = Math.sin(angle) * radius;
+
+                if (i === 0) {
+                    starShape.moveTo(x, y);
+                } else {
+                    starShape.lineTo(x, y);
+                }
+            }
+            starShape.closePath();
+
+            // 创建拉伸几何体（带更多倒角）
+            const starGeo = new THREE.ExtrudeGeometry(starShape, {
+                depth: 0.3,
+                bevelEnabled: true,
+                bevelThickness: 0.3,  // 进一步增加倒角厚度
+                bevelSize: 0.2,       // 进一步增加倒角尺寸
+                bevelSegments: 8      // 增加分段数让倒角更平滑
+            });
+
+            // 红色材质
+            const starMat = new THREE.MeshStandardMaterial({
+                color: CONFIG.colors.red,
+                emissive: 0x440000,
+                emissiveIntensity: 1.5,
+                metalness: 0.8,
+                roughness: 0.2
+            });
+
             const star = new THREE.Mesh(starGeo, starMat);
-            star.position.set(0, CONFIG.particles.treeHeight/2 + 1.2, 0);
-            
-            // 简单光晕 Sprite
-            const halo = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshBasicMaterial({ 
-                map: new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/sprites/glow.png'), 
-                blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.5, color: 0xffaa00 
+            star.position.set(0, CONFIG.particles.treeHeight/2 + 3.0, 0);
+            // 让五角星立起来，两个角（脚）保持水平，并围绕x轴旋转30度
+            star.rotation.z = -Math.PI / 2; // 旋转-90度，让两个底部角水平
+            star.rotation.x = Math.PI / 6; // 围绕x轴旋转30度
+
+            // 在五角星内部添加强白光源
+            const starLight = new THREE.PointLight(0xffffff, 15, 80); // 白光强光源，强度15，距离80
+            starLight.position.set(0, 0, 0); // 位于五角星中心
+            star.add(starLight);
+
+            // 金色光晕
+            const halo = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshBasicMaterial({
+                map: new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/sprites/glow.png'),
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                transparent: true,
+                opacity: 0.8,
+                color: 0xffd700 // 金色光晕
             }));
             star.add(halo);
             starGroup.add(star);
@@ -912,10 +988,25 @@
 
             // 树顶星星动画
             if (STATE.starMesh) {
-                STATE.starMesh.rotation.y -= dt;
-                STATE.starMesh.rotation.z = Math.sin(STATE.time) * 0.2;
-                const scale = 1.0 + Math.sin(STATE.time * 2) * 0.1;
-                STATE.starMesh.scale.set(scale, scale, scale);
+                if (STATE.mode === 'TREE') {
+                    // 聚合状态：重置到初始姿态，星星以相反方向旋转，与树抵消，视觉上静止，同时姿态顺时针旋转30度
+                    // 先重置基础旋转
+                    STATE.starMesh.rotation.z = -Math.PI / 2; // 基础旋转：让两个底部角水平
+                    STATE.starMesh.rotation.x = Math.PI / 6;   // 基础旋转：围绕x轴旋转30度
+
+                    // 然后应用动态旋转（抵消树的旋转）
+                    STATE.starMesh.rotation.y += (0.4 + Math.PI / 3) * dt; // 抵消树旋转 + 姿态旋转30度
+                    STATE.starMesh.scale.set(1, 1, 1);
+                } else if (STATE.mode === 'SCATTER' || STATE.mode === 'FOCUS') {
+                    // 分散状态：星星跟着手势移动
+                    if (STATE.hand.detected) {
+                        STATE.starMesh.rotation.y += STATE.hand.x * dt * 2;
+                        STATE.starMesh.rotation.z += STATE.hand.y * dt * 2;
+                    }
+                    // 轻微的脉动效果
+                    const scale = 1.0 + Math.sin(STATE.time * 3) * 0.1;
+                    STATE.starMesh.scale.set(scale, scale, scale);
+                }
             }
 
             // 更新所有粒子
@@ -971,26 +1062,6 @@
                 }
             });
 
-            // 音乐播放 (交互触发) - 已注释，因为现在使用自动播放
-            /*
-            let audioContextStarted = false;
-            const startMusic = () => {
-                const music = document.getElementById('bg-music');
-                if (music && !audioContextStarted) {
-                    music.volume = 0.5;
-                    music.loop = true; // 确保循环播放
-                    music.play().then(() => {
-                        audioContextStarted = true;
-                        console.log('音乐开始播放并循环');
-                    }).catch(e => {
-                        console.log('音乐播放失败:', e);
-                    });
-                }
-            };
-            window.addEventListener('click', startMusic, { once: true });
-            window.addEventListener('touchstart', startMusic, { once: true });
-            */
-
             // 触摸滑动备用方案 (无摄像头时)
             let touchStartX = 0;
             document.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; });
@@ -1000,6 +1071,39 @@
                 STATE.rotation.y += deltaX * 0.005;
                 touchStartX = e.touches[0].clientX;
             });
+
+            // 用户点击或触摸时播放音乐：先播放perfect，再播放music循环
+            let musicStarted = false;
+            const startMusicOnInteraction = () => {
+                if (!musicStarted) {
+                    musicStarted = true;
+                    const perfectMusic = document.getElementById('bg-music-perfect');
+                    const mainMusic = document.getElementById('bg-music-main');
+
+                    if (perfectMusic && mainMusic) {
+                        // 设置音量
+                        perfectMusic.volume = 0.5;
+                        mainMusic.volume = 0.5;
+                        mainMusic.loop = true; // 主音乐循环播放
+
+                        // 先播放perfect.mp3
+                        perfectMusic.play().then(() => {
+                            console.log('开始播放perfect.mp3');
+                            // perfect播放完后播放主音乐
+                            perfectMusic.addEventListener('ended', () => {
+                                console.log('perfect.mp3播放完毕，开始播放主音乐循环');
+                                mainMusic.play().catch(err => console.log('主音乐播放失败:', err));
+                            }, { once: true });
+                        }).catch(err => {
+                            console.log('perfect.mp3播放失败，直接播放主音乐:', err);
+                            // 如果perfect播放失败，直接播放主音乐
+                            mainMusic.play().catch(err2 => console.log('主音乐播放失败:', err2));
+                        });
+                    }
+                }
+            };
+            document.addEventListener('click', startMusicOnInteraction, { once: true });
+            document.addEventListener('touchstart', startMusicOnInteraction, { once: true });
         }
 
         // 启动程序
