@@ -60,8 +60,8 @@
         /* 右上角控制按钮组 */
         #top-right-controls {
             position: absolute; top: 20px; right: 20px;
-            z-index: 30; 
-            display: flex; 
+            z-index: 30;
+            display: flex;
             flex-direction: column; /* 纵向排列 */
             gap: 15px; /* 按钮间距 */
             pointer-events: auto;
@@ -75,11 +75,11 @@
             opacity: 1;
 
             /* 取消圆形宽高，改为自适应或固定宽度 */
-            width: 100px;
-            height: auto;
-            padding: 10px 0; /* 上下留白 */
+            width: 40px;
+            height: 40px;
+            padding: 0; /* 移除内边距 */
 
-            border-radius: 12px; /* 圆角矩形 */
+            border-radius: 10px; /* 圆角矩形 */
 
             display: flex; align-items: center; justify-content: center;
             font-family: 'Cinzel', serif; /* 保持字体风格 */
@@ -91,6 +91,18 @@
             transition: all 0.3s ease;
             box-shadow: 0 0 10px rgba(212, 175, 55, 0.1);
             outline: none; -webkit-tap-highlight-color: transparent;
+        }
+
+        /* 添加图片图标样式 */
+        .add-photo-icon {
+            width: 24px;
+            height: 24px;
+            fill: #d4af37;
+            transition: fill 0.3s ease;
+        }
+
+        .control-btn:hover .add-photo-icon {
+            fill: #ffffff;
         }
         .control-btn:hover {
             background: rgba(212, 175, 55, 0.2);
@@ -169,7 +181,12 @@
 
     <div id="ui-layer">
         <div id="top-right-controls">
-            <button id="btn-add-photo" class="control-btn">add images</button>
+            <button id="btn-add-photo" class="control-btn">
+                <svg class="add-photo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" />
+                    <path d="M8.5,13.5L10,12L11.5,14.5L14,12V17H8.5V13.5Z" />
+                </svg>
+            </button>
         </div>
         <input type="file" id="file-input" multiple accept="image/*">
     </div>
@@ -237,14 +254,14 @@
             currentPhotoIndex: -1, // 当前展示的照片索引
             
             // 交互输入数据
-            hand: { detected: false, x: 0, y: 0 },
+            hand: { detected: false, x: 0, y: 0, lastDetectedTime: 0 },
             mouse: { x: 0, y: 0 },
-            
+
             // 动画状态
             rotation: { x: 0, y: 0 },
             spinVel: { x: 0, y: 0 }, // 旋转速度 (x: 仰俯, y: 左右)
             time: 0,
-            
+
             // 逻辑辅助
             wasPointing: false, // 上一帧是否在指点
             palmCenter: { x: 0.5, y: 0.5 }, // 手掌中心基准点
@@ -256,9 +273,11 @@
         let scene, camera, renderer, composer;
         let mainGroup, starGroup, bgGroup, photoMeshGroup;
         let clock = new THREE.Clock();
-        let particleSystem = []; 
+        let particleSystem = [];
         let handLandmarker, video, drawingUtils, canvasCtx;
         let caneTexture; // 糖果拐杖纹理
+        let photoPositions = []; // 记录照片位置和尺寸，用于防重叠
+        let musicStarted = false; // 音乐是否已经开始播放
 
         // 自动播放音乐函数
         function startAutoMusic() {
@@ -299,6 +318,36 @@
                 };
 
                 attemptPlay();
+            }
+        }
+
+        // 添加照片后触发音乐播放
+        function startMusicAfterPhotoUpload() {
+            if (musicStarted) return; // 如果音乐已经开始播放，不重复触发
+
+            musicStarted = true;
+            const perfectMusic = document.getElementById('bg-music-perfect');
+            const mainMusic = document.getElementById('bg-music-main');
+
+            if (perfectMusic && mainMusic) {
+                // 设置音量
+                perfectMusic.volume = 0.5;
+                mainMusic.volume = 0.5;
+                mainMusic.loop = true; // 主音乐循环播放
+
+                // 先播放perfect.mp3
+                perfectMusic.play().then(() => {
+                    console.log('添加照片后开始播放perfect.mp3');
+                    // perfect播放完后播放主音乐
+                    perfectMusic.addEventListener('ended', () => {
+                        console.log('perfect.mp3播放完毕，开始播放主音乐循环');
+                        mainMusic.play().catch(err => console.log('主音乐播放失败:', err));
+                    }, { once: true });
+                }).catch(err => {
+                    console.log('perfect.mp3播放失败，直接播放主音乐:', err);
+                    // 如果perfect播放失败，直接播放主音乐
+                    mainMusic.play().catch(err2 => console.log('主音乐播放失败:', err2));
+                });
             }
         }
 
@@ -413,7 +462,7 @@
         // ==========================================
         // 5. 粒子与内容创建
         // ==========================================
-        
+
         // 粒子类：封装每个粒子的行为逻辑
         class Particle {
             constructor(mesh, type, isDust = false) {
@@ -449,15 +498,8 @@
 
                 // --- 1. 计算树形态坐标 (Spiral Cone) ---
                 if (this.type === 'PHOTO') {
-                    // 照片特殊处理：避免树顶星星区域
-                    // 限制照片高度在树的下半部分 (t < 0.6)
-                    t = Math.random() * 0.6;
-                    const y = (t * h) - h/2;
-                    let rMax = CONFIG.particles.treeRadius * (1.0 - t);
-                    if (rMax < 0.5) rMax = 0.5;
-                    const angle = Math.random() * Math.PI * 2;
-                    const r = rMax * Math.sqrt(Math.random());
-                    this.posTree.set(Math.cos(angle) * r, y, Math.sin(angle) * r);
+                    // 照片位置已在 addPhotoToScene 中预设，这里不再随机生成
+                    // 只计算散开形态的位置
                 } else if (Math.random() > 0.7 && !this.isDust && this.type !== 'PHOTO') {
                     // 核心树干部分 (更规则)
                     const y = (t * h) - h/2;
@@ -511,8 +553,8 @@
                             this.focusScale = 0.1; // 从很小开始
                             this.isInFocus = true;
                         }
-                        // 逐渐变大，最大到3倍基础尺寸
-                        this.focusScale = THREE.MathUtils.lerp(this.focusScale, this.baseScale * 2.5, dt * 3.0);
+                        // 逐渐变大，最大到3.5倍基础尺寸
+                        this.focusScale = THREE.MathUtils.lerp(this.focusScale, this.baseScale * 3.5, dt * 4.0);
                         s = this.focusScale;
                     } else {
                         target = this.posScatter;
@@ -574,6 +616,61 @@
             caneTexture.repeat.set(3, 3);
         }
 
+        // 创建胡桃木纹理
+        function createWalnutTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+
+            // 基础颜色 - 胡桃木色
+            const gradient = ctx.createLinearGradient(0, 0, 256, 256);
+            gradient.addColorStop(0, '#654321');
+            gradient.addColorStop(0.5, '#654321');
+            gradient.addColorStop(1, '#654321');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 256, 256);
+
+            // 添加木纹理
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.strokeStyle = 'rgba(139, 69, 19, 0.3)';
+            ctx.lineWidth = 2;
+
+            // 绘制木纹线条
+            for (let i = 0; i < 20; i++) {
+                const y = Math.random() * 256;
+                const amplitude = 10 + Math.random() * 20;
+                const frequency = 0.01 + Math.random() * 0.02;
+
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                for (let x = 0; x < 256; x += 2) {
+                    const wave = Math.sin(x * frequency) * amplitude;
+                    ctx.lineTo(x, y + wave);
+                }
+                ctx.stroke();
+            }
+
+            // 添加一些随机的深色斑点（木结）
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.fillStyle = 'rgba(101, 67, 33, 0.4)';
+            for (let i = 0; i < 15; i++) {
+                const x = Math.random() * 256;
+                const y = Math.random() * 256;
+                const radius = 2 + Math.random() * 4;
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(2, 2);
+
+            return texture;
+        }
+
         // 创建背景银河粒子
         function createGalaxyBackground() {
             const geometry = new THREE.BufferGeometry();
@@ -609,8 +706,8 @@
 
         // 创建主粒子系统
         function createParticles() {
-            const sphereGeo = new THREE.SphereGeometry(0.5, 32, 32); 
-            const boxGeo = new THREE.BoxGeometry(0.45, 0.45, 0.45); 
+            const sphereGeo = new THREE.SphereGeometry(0.5, 32, 32);
+            const boxGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
             // 糖果形状（加大手杖尺寸）
             const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0, -0.5, 0), new THREE.Vector3(0, 0.3, 0), new THREE.Vector3(0.1, 0.5, 0), new THREE.Vector3(0.3, 0.4, 0)]);
             const candyGeo = new THREE.TubeGeometry(curve, 20, 0.08, 8, false);
@@ -720,24 +817,91 @@
         // ==========================================
         // 6. 照片上传与处理
         // ==========================================
+
+        // 检查两个矩形是否重叠的辅助函数
+        function rectanglesOverlap(rect1, rect2) {
+            return !(rect1.x + rect1.width/2 < rect2.x - rect2.width/2 ||
+                     rect1.x - rect1.width/2 > rect2.x + rect2.width/2 ||
+                     rect1.y + rect1.height/2 < rect2.y - rect2.height/2 ||
+                     rect1.y - rect1.height/2 > rect2.y + rect2.height/2);
+        }
+
+        // 查找不重叠的位置
+        function findNonOverlappingPosition(photoW, photoH, maxAttempts = 50) {
+            const h = CONFIG.particles.treeHeight;
+            const treeRadius = CONFIG.particles.treeRadius;
+            const margin = 0.5; // 最小间距
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                // 在树的下半部分随机选择位置
+                const t = Math.random() * 0.6; // 高度比例 0~0.6
+                const y = (t * h) - h/2;
+                let rMax = treeRadius * (1.0 - t);
+                if (rMax < 0.5) rMax = 0.5;
+                const angle = Math.random() * Math.PI * 2;
+                const r = rMax * Math.sqrt(Math.random());
+                const x = Math.cos(angle) * r;
+                const z = Math.sin(angle) * r;
+
+                // 检查与现有照片是否重叠
+                let overlaps = false;
+                const newRect = { x: x, y: y, width: photoW + margin, height: photoH + margin };
+
+                for (const existing of photoPositions) {
+                    if (rectanglesOverlap(newRect, existing)) {
+                        overlaps = true;
+                        break;
+                    }
+                }
+
+                if (!overlaps) {
+                    // 记录这个位置
+                    photoPositions.push(newRect);
+                    return { x, y, z };
+                }
+            }
+
+            // 如果尝试多次仍找不到不重叠的位置，返回随机位置
+            console.warn('无法找到不重叠的位置，使用随机位置');
+            const t = Math.random() * 0.6;
+            const y = (t * h) - h/2;
+            let rMax = treeRadius * (1.0 - t);
+            if (rMax < 0.5) rMax = 0.5;
+            const angle = Math.random() * Math.PI * 2;
+            const r = rMax * Math.sqrt(Math.random());
+            const x = Math.cos(angle) * r;
+            const z = Math.sin(angle) * r;
+            photoPositions.push({ x: x, y: y, width: photoW + margin, height: photoH + margin });
+            return { x, y, z };
+        }
+
         function addPhotoToScene(texture) {
             const img = texture.image;
             if (!img) return;
 
             // 计算宽高比，限制最大尺寸
             const aspect = img.width / img.height;
-            const maxSize = 3.0;
+            const maxSize = 2.0;
             let photoW, photoH;
 
-            if (aspect >= 1) { photoW = maxSize; photoH = maxSize / aspect; } 
+            if (aspect >= 1) { photoW = maxSize; photoH = maxSize / aspect; }
             else { photoH = maxSize; photoW = maxSize * aspect; }
 
+            // 查找不重叠的位置
+            const position = findNonOverlappingPosition(photoW, photoH);
+
             // 创建相框 Mesh
-            const frameMargin = 0.15;                
+            const frameMargin = 0.15;
             const group = new THREE.Group();
 
             const frameGeo = new THREE.BoxGeometry(photoW + frameMargin, photoH + frameMargin, 0.1);
-            const frameMat = new THREE.MeshStandardMaterial({ color: CONFIG.colors.gold, metalness: 1.0, roughness: 0.2 });
+            const walnutTexture = createWalnutTexture();
+            const frameMat = new THREE.MeshStandardMaterial({
+                map: walnutTexture, // 应用胡桃木纹理
+                color: 0x654321,    // 保持基础颜色
+                metalness: 0.0,     // 非金属材质
+                roughness: 0.9      // 适中的粗糙度
+            });
             const frame = new THREE.Mesh(frameGeo, frameMat);
 
             const photoGeo = new THREE.PlaneGeometry(photoW, photoH);
@@ -748,10 +912,16 @@
             group.add(frame);
             group.add(photo);
 
+            // 设置位置
+            group.position.set(position.x, position.y, position.z);
+
             photoMeshGroup.add(group);
-            
-            // 将照片也作为一个粒子加入系统
-            particleSystem.push(new Particle(group, 'PHOTO', false));
+
+            // 将照片也作为一个粒子加入系统，但使用固定位置
+            const particle = new Particle(group, 'PHOTO', false);
+            // 覆盖位置计算，使用预设位置
+            particle.posTree.copy(group.position);
+            particleSystem.push(particle);
         }
 
         function handleImageUpload(e) {
@@ -858,6 +1028,7 @@
         // 核心手势判断算法
        function processGestures(lm) {
             STATE.hand.detected = true;
+            STATE.hand.lastDetectedTime = STATE.time; // 记录最后检测到手的时间
 
             // 获取关键点坐标 (0:手腕, 4:拇指, 8:食指...)
             const wrist = lm[0];
@@ -866,7 +1037,7 @@
             const middleTip = lm[12];
             const ringTip = lm[16];
             const pinkyTip = lm[20];
-            const palm = lm[9]; 
+            const palm = lm[9];
 
             // 计算指尖到手腕距离
             const dIndex = Math.hypot(indexTip.x - wrist.x, indexTip.y - wrist.y);
@@ -883,26 +1054,29 @@
 
             // --- 状态机切换逻辑 ---
 
-            // 1. FOCUS 模式 (指点 -> 切换照片/聚焦星星)
+            // 1. FOCUS 模式 (指点 -> 切换照片，仅在有照片时有效)
             if (isPointing) {
-                STATE.mode = 'FOCUS';
                 const photos = particleSystem.filter(p => p.type === 'PHOTO');
 
-                // 防抖动：只有刚开始指点的一瞬间切换目标
-                if (!STATE.wasPointing) {
-                    if (photos.length > 0) {
+                // 只有在有照片时才进入FOCUS模式切换照片
+                if (photos.length > 0) {
+                    STATE.mode = 'FOCUS';
+
+                    // 防抖动：只有刚开始指点的一瞬间切换目标
+                    if (!STATE.wasPointing) {
                         STATE.currentPhotoIndex = (STATE.currentPhotoIndex + 1) % photos.length;
                         STATE.focusTarget = photos[STATE.currentPhotoIndex].mesh;
-                    } else {
-                        STATE.focusTarget = STATE.starMesh;
                     }
+                    STATE.wasPointing = true;
+
+                    // 聚焦时停止手势旋转
+                    STATE.hasPalmCenter = false;
+                    STATE.spinVel.x *= 0.9;
+                    STATE.spinVel.y *= 0.9;
+                } else {
+                    // 没有照片时，食指伸直手势不做任何操作
+                    STATE.wasPointing = false;
                 }
-                STATE.wasPointing = true;
-                
-                // 聚焦时停止手势旋转
-                STATE.hasPalmCenter = false;
-                STATE.spinVel.x *= 0.9;
-                STATE.spinVel.y *= 0.9;
             }
 
             // 2. TREE / SCATTER 模式
@@ -960,7 +1134,18 @@
 
             // 计算输入源
             let inputX = STATE.hand.detected ? STATE.hand.x : STATE.mouse.x * 0.5;
-            
+
+            // 检查粒子分散状态超时：3秒没有识别到手势则回到树模式
+            if (STATE.mode === 'SCATTER' && STATE.time - STATE.hand.lastDetectedTime > 3.0) {
+                console.log('粒子分散状态超时，回到树模式');
+                STATE.mode = 'TREE';
+                STATE.hasPalmCenter = false;
+                STATE.spinVel.x = 0;
+                STATE.spinVel.y = 0;
+                STATE.focusTarget = null; // 清除聚焦目标
+                STATE.currentPhotoIndex = -1; // 重置照片索引
+            }
+
             // --- 全局旋转控制 ---
             if (STATE.mode === 'TREE') {
                 // 自动慢自转
@@ -1032,6 +1217,7 @@
             if (addPhotoBtn && fileInput) {
                 addPhotoBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
+                    e.preventDefault();
                     fileInput.click();
                 });
                 fileInput.addEventListener('change', handleImageUpload);
@@ -1072,9 +1258,9 @@
                 touchStartX = e.touches[0].clientX;
             });
 
-            // 用户点击或触摸时播放音乐：先播放perfect，再播放music循环
+            // 为非按钮元素添加音乐触发器
             let musicStarted = false;
-            const startMusicOnInteraction = () => {
+            const startMusicOnCanvasInteraction = () => {
                 if (!musicStarted) {
                     musicStarted = true;
                     const perfectMusic = document.getElementById('bg-music-perfect');
@@ -1102,8 +1288,13 @@
                     }
                 }
             };
-            document.addEventListener('click', startMusicOnInteraction, { once: true });
-            document.addEventListener('touchstart', startMusicOnInteraction, { once: true });
+
+            // 为 Canvas 容器添加点击和触摸事件监听器
+            const canvasContainer = document.getElementById('canvas-container');
+            if (canvasContainer) {
+                canvasContainer.addEventListener('click', startMusicOnCanvasInteraction, { once: true });
+                canvasContainer.addEventListener('touchstart', startMusicOnCanvasInteraction, { once: true });
+            }
         }
 
         // 启动程序
